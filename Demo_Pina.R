@@ -24,9 +24,10 @@
 # ------------------------------------------------------------------------------
 
 
-# --------------------- RUTAS (estilo Palmatica) ------------------------
+# --------------------- RUTAS -----------------------------------------
 # Directorio de datos. Cambia solo esta variable para mover todo el proyecto.
-data_dir <- normalizePath(file.path(getwd(), "data"), winslash = "/", mustWork = TRUE)
+# Directorio de datos relativo al proyecto
+data_dir <- "data"  # <-- así funciona igual en tu PC y en Connect
 
 # Rutas absolutas a los archivos de entrada (vector y tabla).
 path_vector <- file.path(data_dir, "Bloques.gpkg")
@@ -851,4 +852,5 @@ server <- function(input, output, session) {
 
 # Lanza la app
 shinyApp(ui, server)
+
 
