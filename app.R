@@ -1,4 +1,6 @@
 # app.R — wrapper para Posit Connect
-# No toques tu Demo_Pina.R; este archivo solo lo carga.
+# Carga definiciones (ui, server) en el entorno actual
 source("Demo_Pina.R", local = TRUE)
 
+# Devuelve el shiny.appobj que Connect espera
+shinyApp(ui = ui, server = server)
