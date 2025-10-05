@@ -73,7 +73,7 @@ options(shiny.maxRequestSize = 200*1024^2)   # Permite archivos relativamente gr
 
 # (Opcional) Manifest para publicar en Posit Connect Cloud desde este archivo único.
 # Si no lo usas, comenta esta línea sin problema.
-rsconnect::writeManifest(appPrimaryDoc = "Demo_Pina.R")
+# rsconnect::writeManifest(appPrimaryDoc = "Demo_Pina.R")
 
 
 # --------------------- Helpers ----------------------------------------
@@ -852,5 +852,6 @@ server <- function(input, output, session) {
 
 # Lanza la app
 shinyApp(ui, server)
+
 
 
