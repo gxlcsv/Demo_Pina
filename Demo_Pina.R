@@ -26,7 +26,7 @@
 
 # --------------------- RUTAS (estilo Palmatica) ------------------------
 # Directorio de datos. Cambia solo esta variable para mover todo el proyecto.
-data_dir   <- "E:/09. EJEMPLO PIÑA/Data"     # <-- CAMBIA AQUÍ si tu carpeta es otra
+data_dir <- normalizePath(file.path(getwd(), "data"), winslash = "/", mustWork = TRUE)
 
 # Rutas absolutas a los archivos de entrada (vector y tabla).
 path_vector <- file.path(data_dir, "Bloques.gpkg")
@@ -851,3 +851,4 @@ server <- function(input, output, session) {
 
 # Lanza la app
 shinyApp(ui, server)
+
