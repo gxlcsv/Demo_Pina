@@ -63,17 +63,23 @@ CONFIG <- list(
 
 
 # ---- Paquetes ----
-# Si falta alguno, se instala. Luego se cargan todos.
+# En producción (Posit Connect) NO instales paquetes en runtime.
+# Cárgalos y, si falta alguno, aborta con un mensaje claro.
 libs <- c("shiny","leaflet","sf","sp","dplyr","stringr","DT","readxl","readr",
-          "forcats","plotly","tools","tidyr","classInt","lubridate","htmltools","purrr","rsconnect")
-to_install <- setdiff(libs, rownames(installed.packages()))
-if (length(to_install)) install.packages(to_install, dependencies = TRUE)
-invisible(lapply(libs, require, character.only = TRUE))
+          "forcats","plotly","tools","tidyr","classInt","lubridate","htmltools","purrr")
+
+# Carga silenciosa; 'require' devuelve TRUE/FALSE por paquete
+ok <- sapply(libs, require, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)
+if (!all(ok)) {
+  missing_libs <- paste(libs[!ok], collapse = ", ")
+  stop(paste0("Faltan paquetes: ", missing_libs,
+              "\nInstálalos localmente (o verifica que Connect los provea) y vuelve a publicar."))
+}
+
 options(shiny.maxRequestSize = 200*1024^2)   # Permite archivos relativamente grandes
 
-# (Opcional) Manifest para publicar en Posit Connect Cloud desde este archivo único.
-# Si no lo usas, comenta esta línea sin problema.
-# rsconnect::writeManifest(appPrimaryDoc = "Demo_Pina.R")
+# (solo para desarrollo local) Manifest opcional:
+# if (interactive()) rsconnect::writeManifest(appPrimaryDoc = "Demo_Pina.R")
 
 
 # --------------------- Helpers ----------------------------------------
@@ -852,6 +858,7 @@ server <- function(input, output, session) {
 
 # Lanza la app
 shinyApp(ui, server)
+
 
 
 
