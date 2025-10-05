@@ -20,26 +20,17 @@
 # Requisitos mínimos:
 # - "Bloques.gpkg" con una capa poligonal o puntual que contenga la columna "Name".
 # - "Datos_Indice_Vegetativos.xlsx" con columnas de índices y temperatura por bloque/fecha.
-#
 # ------------------------------------------------------------------------------
 
-
 # --------------------- RUTAS -----------------------------------------
-# Directorio de datos. Cambia solo esta variable para mover todo el proyecto.
-# Directorio de datos relativo al proyecto
-data_dir <- "data"  # <-- así funciona igual en tu PC y en Connect
+# Directorio de datos relativo al proyecto (funciona igual en tu PC y en Connect)
+data_dir <- "data"  # Asegúrate de subir los archivos a la carpeta 'data/' del repo
 
-# Rutas absolutas a los archivos de entrada (vector y tabla).
+# Rutas de entrada (vector y tabla)
 path_vector <- file.path(data_dir, "Bloques.gpkg")
 path_table  <- file.path(data_dir, "Datos_Indice_Vegetativos.xlsx")
 
-
 # --------------------- CONFIG -----------------------------------------
-# En CONFIG defines:
-# - Ruta y capa del GPKG (si hay varias capas).
-# - Hoja del Excel.
-# - CRS asumido si el vector no trae proyección.
-# - Mapeo de columnas clave: por defecto usamos "Name" como ID en vector y tabla.
 CONFIG <- list(
   vector_path = path_vector,
   gpkg_layer  = "Bloques",   # Usa sf::st_layers(path_vector) para listar nombres disponibles
@@ -49,10 +40,9 @@ CONFIG <- list(
   columns = list(
     id_vector = "Name",      # Columna de ID en el vector (GPKG)
     id_table  = "Name",      # Columna de ID en la tabla (Excel/CSV) — debe relacionar con id_vector
-    date   = NULL,           # Si el Excel ya trae una fecha completa, pon aquí el nombre (ej: "Fecha")
+    date   = NULL,           # Si el Excel ya trae una fecha completa (ej: "Fecha")
     year   = NULL,           # Alternativa a date: columna Año / Year
     month  = NULL,           # Alternativa a date: columna Mes / Month
-    # Índices vegetativos y temperatura. Pon los nombres exactos si ya los sabes.
     clorofila = "Clorofila",
     nitrogeno = "Nitrogeno",
     biomasa   = "NDVI",
@@ -61,41 +51,39 @@ CONFIG <- list(
   )
 )
 
-
 # ---- Paquetes ----
 # En producción (Posit Connect) NO instales paquetes en runtime.
-# Cárgalos y, si falta alguno, aborta con un mensaje claro.
-libs <- c("shiny","leaflet","sf","sp","dplyr","stringr","DT","readxl","readr",
-          "forcats","plotly","tools","tidyr","classInt","lubridate","htmltools","purrr")
-
-# Carga silenciosa; 'require' devuelve TRUE/FALSE por paquete
-ok <- sapply(libs, require, character.only = TRUE, quietly = TRUE, warn.conflicts = FALSE)
-if (!all(ok)) {
-  missing_libs <- paste(libs[!ok], collapse = ", ")
-  stop(paste0("Faltan paquetes: ", missing_libs,
-              "\nInstálalos localmente (o verifica que Connect los provea) y vuelve a publicar."))
-}
+# Carga explícita (para que Connect detecte dependencias).
+suppressPackageStartupMessages({
+  library(shiny)
+  library(leaflet)
+  library(leaflet.providers)
+  library(sf)
+  library(sp)
+  library(dplyr)
+  library(stringr)
+  library(DT)
+  library(readxl)
+  library(readr)
+  library(plotly)
+  library(tidyr)
+  library(classInt)
+  library(lubridate)
+  library(htmltools)
+  library(purrr)
+  # 'tools' es base; no hace falta library(tools)
+})
 
 options(shiny.maxRequestSize = 200*1024^2)   # Permite archivos relativamente grandes
-
 # (solo para desarrollo local) Manifest opcional:
 # if (interactive()) rsconnect::writeManifest(appPrimaryDoc = "Demo_Pina.R")
 
-
 # --------------------- Helpers ----------------------------------------
-# Utilidades usadas en varias partes del código
-
-# Convierte un vector o named vector a "choices" para inputs
 to_choices <- function(x) { n <- names(x); if (is.null(n)) setNames(as.list(x), x) else setNames(as.list(unname(x)), n) }
 
-# Quita tildes; útil para normalizar nombres de columnas/meses
 strip_accents <- function(x) { x <- gsub("[áÁ]","a",x); x <- gsub("[éÉ]","e",x); x <- gsub("[íÍ]","i",x); x <- gsub("[óÓ]","o",x); x <- gsub("[úÚüÜ]","u",x); x }
 strip_all <- function(x) strip_accents(tolower(x))
 
-# Normaliza IDs de bloque:
-# - Recorta espacios, pasa a mayúscula y deja solo A–Z/0–9.
-# - Si hay dígitos: elimina ceros a la izquierda (B01 -> 1).
-# - Evita descalces entre "B1" vs "B01" o "B-01".
 normalize_id <- function(x) {
   s <- as.character(x); s <- trimws(s); s <- toupper(s)
   digits <- gsub("[^0-9]", "", s, perl = TRUE)
@@ -107,7 +95,6 @@ normalize_id <- function(x) {
   ifelse(has_digits, id_num, alnum)
 }
 
-# Lector vectorial robusto: GPKG/GeoJSON/ZIP(shp). Asegura geometrías válidas y CRS 4326.
 read_vector_any <- function(filepath, layer = NULL) {
   fpath <- try(normalizePath(filepath, winslash = "/", mustWork = TRUE), silent = TRUE)
   if (inherits(fpath,"try-error")) fpath <- filepath
@@ -126,16 +113,14 @@ read_vector_any <- function(filepath, layer = NULL) {
   } else if (ext %in% c("geojson","json")) {
     v <- sf::st_read(fpath, quiet = TRUE)
   } else stop("Formato vectorial no soportado: ", ext)
-  
-  v <- sf::st_make_valid(v)               # Geometrías válidas
-  v <- sf::st_zm(v, drop = TRUE, what = "ZM") # Quita Z/M si existen
+  v <- sf::st_make_valid(v)
+  v <- sf::st_zm(v, drop = TRUE, what = "ZM")
   if (is.na(sf::st_crs(v)) && !is.null(CONFIG$assumed_crs)) v <- sf::st_set_crs(v, CONFIG$assumed_crs)
-  try({ v <- sf::st_transform(v, 4326) }, silent = TRUE) # A WGS84 para Leaflet
+  try({ v <- sf::st_transform(v, 4326) }, silent = TRUE)
   v <- v[!sf::st_is_empty(v), ]
   v
 }
 
-# Lector tabular robusto: Excel (por hoja) o CSV (auto detecta coma/;).
 read_table_any <- function(filepath, sheet = NULL) {
   fpath <- try(normalizePath(filepath, winslash = "/", mustWork = TRUE), silent = TRUE)
   if (inherits(fpath,"try-error")) fpath <- filepath
@@ -150,11 +135,6 @@ read_table_any <- function(filepath, sheet = NULL) {
   } else stop("Formato tabular no soportado: ", ext)
 }
 
-# Parser flexible de fechas. Acepta:
-# - Date nativo
-# - Números Excel (base 1899-12-30)
-# - YYYYMM/ YYYY-MM / "mes-año" en español/inglés
-# - Múltiples formatos dd/mm/yyyy, etc.
 smart_parse_date <- function(x) {
   if (inherits(x,"Date")) return(as.Date(x))
   if (is.numeric(x)) {
@@ -180,7 +160,6 @@ smart_parse_date <- function(x) {
   as.Date(suppressWarnings(lubridate::parse_date_time(low2, orders = ords, exact = FALSE)))
 }
 
-# Detecta familia geométrica para pintar en Leaflet (point/line/polygon)
 geom_family <- function(x) {
   t <- unique(as.character(sf::st_geometry_type(x, by_geometry = TRUE)))
   if (!length(t)) return("other")
@@ -193,8 +172,6 @@ geom_family <- function(x) {
   "other"
 }
 
-# Añade geometrías al mapa probando varias estrategias si la primera falla:
-# - sf nativo -> cast a MULTI -> cast a tipo simple -> coerción a Spatial
 safe_add <- function(proxy, fam, dat, add_args) {
   try1 <- try({
     if (fam == "point") do.call(leaflet::addCircleMarkers, c(list(map = proxy, data = dat), add_args))
@@ -223,19 +200,15 @@ safe_add <- function(proxy, fam, dat, add_args) {
   stop(try1)
 }
 
-# Expande un bbox en porcentaje para evitar que el fitBounds quede muy ajustado
 expand_bbox <- function(bb, pad = 0.04) {
   xmn <- as.numeric(bb["xmin"]); xmx <- as.numeric(bb["xmax"]); ymn <- as.numeric(bb["ymin"]); ymx <- as.numeric(bb["ymax"])
   if (!all(is.finite(c(xmn,xmx,ymn,ymx)))) return(NULL)
   if (xmx-xmn==0) { xmn <- xmn-0.002; xmx <- xmx+0.002 }
   if (ymx-ymn==0) { ymn <- ymn-0.002; ymx <- ymx+0.002 }
   dx <- xmx-xmn; dy <- ymx-ymn
-  c(xmn - dx*pad, ymn - dy*pad, xmx + dx*pad, ymx + dy*pad)  # vector numérico sin nombres
+  c(xmn - dx*pad, ymn - dy*pad, xmx + dx*pad, ymx + dy*pad)
 }
 
-# Mapeo automático de columnas a partir de CONFIG y nombres reales en tabla/vector.
-# Si CONFIG$columns trae nombres explícitos, se usan.
-# Si no, intentamos descubrir las columnas por aproximación (match exacto y por patrón).
 resolve_colmap <- function(tb, v) {
   CM <- CONFIG$columns
   pick <- function(cands, pool_names) {
@@ -262,119 +235,98 @@ resolve_colmap <- function(tb, v) {
        clorofila=clorofila, nitrogeno=nitrogeno, biomasa=biomasa, estres=estres, temp=temp)
 }
 
-# Paletas fijas (semáforo para índices; azul-amarillo-rojo para temperatura).
 LEVELS_CLASE <- c("DEFICIENTE","REGULAR","BUENO")
 TEMP_LABELS  <- c("Temperatura Baja","Temperatura Media","Temperatura Alta")
 pal_index <- c("DEFICIENTE"="#d73027","REGULAR"="#fee08b","BUENO"="#1a9850")
 pal_temp  <- c("Temperatura Baja"="#4575b4","Temperatura Media"="#fee08b","Temperatura Alta"="#d73027")
-
 
 # ------------------------- UI ------------------------
 ui <- fluidPage(
   titlePanel("Demostración Proyecto Piña"),
   sidebarLayout(
     sidebarPanel(width = 4,
-                 h4("Parámetros"),
-                 # Modo de clasificación por índice:
-                 # - pct: terciles por percentiles
-                 # - jenks: 3 clases por JENKS (mejor cuando hay modas)
-                 # - manual: slider para t1/t2 por índice en el mes activo
-                 radioButtons("class_mode","Modo de umbrales por índice",
-                              choices = to_choices(c("Automático (Percentiles)"="pct",
-                                                     "Automático (Jenks)"="jenks",
-                                                     "Manual (barras por índice)"="manual")),
-                              selected = "jenks"),
-                 # Por defecto, "estrés alto = bueno" (en piña suele interpretarse así).
-                 # Marca el checkbox para invertirlo.
-                 checkboxInput("invert_stress","Invertir Estrés (marca si 'alto = malo')", value = FALSE),
-                 # Peso de temperatura en el score final (0 = ignora T°, 1 = solo T°)
-                 sliderInput("temp_weight","Peso relativo de Temperatura", min=0, max=1, value=0.2, step=0.05),
-                 
-                 # Rango de 'Temperatura Media' (por defecto 35–40 °C).
-                 numericInput("temp_mid_min","Temperatura Media — mínimo (°C)", value = 35, step = 0.5),
-                 numericInput("temp_mid_max","Temperatura Media — máximo (°C)", value = 40, step = 0.5),
-                 
-                 # “Color por”: score final o una de las capas de clasificación
-                 selectInput("view_mode","Color por",
-                             choices = to_choices(c("Score final"="score","Clorofila"="clorofila",
-                                                    "Nitrógeno"="nitrogeno","Biomasa"="biomasa",
-                                                    "Estrés"="estres","Temperatura"="temp")),
-                             selected = "score"),
-                 
-                 # Sliders manuales por índice (aparecen solo si "manual")
-                 conditionalPanel(
-                   condition = "input.class_mode == 'manual'",
-                   h4("Umbrales manuales (por índice)"),
-                   uiOutput("ui_thr_clorofila"),
-                   uiOutput("ui_thr_nitrogeno"),
-                   uiOutput("ui_thr_biomasa"),
-                   uiOutput("ui_thr_estres"),
-                   tags$small("Sugeridos desde la distribución del mes seleccionado.")
-                 ),
-                 tags$hr(),
-                 # Botón para re-centrar el mapa al bbox de la capa
-                 actionButton("btn_recenter", "Zoom a bloques")
+      h4("Parámetros"),
+      radioButtons("class_mode","Modo de umbrales por índice",
+        choices = to_choices(c(
+          "Automático (Percentiles)"="pct",
+          "Automático (Jenks)"="jenks",
+          "Manual (barras por índice)"="manual")),
+        selected = "jenks"),
+      checkboxInput("invert_stress","Invertir Estrés (marca si 'alto = malo')", value = FALSE),
+      sliderInput("temp_weight","Peso relativo de Temperatura", min=0, max=1, value=0.2, step=0.05),
+      numericInput("temp_mid_min","Temperatura Media — mínimo (°C)", value = 35, step = 0.5),
+      numericInput("temp_mid_max","Temperatura Media — máximo (°C)", value = 40, step = 0.5),
+      selectInput("view_mode","Color por",
+        choices = to_choices(c("Score final"="score","Clorofila"="clorofila",
+                               "Nitrógeno"="nitrogeno","Biomasa"="biomasa",
+                               "Estrés"="estres","Temperatura"="temp")),
+        selected = "score"),
+      conditionalPanel(
+        condition = "input.class_mode == 'manual'",
+        h4("Umbrales manuales (por índice)"),
+        uiOutput("ui_thr_clorofila"),
+        uiOutput("ui_thr_nitrogeno"),
+        uiOutput("ui_thr_biomasa"),
+        uiOutput("ui_thr_estres"),
+        tags$small("Sugeridos desde la distribución del mes seleccionado.")
+      ),
+      tags$hr(),
+      actionButton("btn_recenter", "Zoom a bloques")
     ),
     mainPanel(width = 8,
-              tabsetPanel(id = "tabs",
-                          tabPanel("Mapa",
-                                   fluidRow(
-                                     column(4, uiOutput("ui_month")),         # selector de mes (YYYY-MM) dentro del rango
-                                     column(5, uiOutput("ui_daterange")),     # rango de fechas global (afecta mapa y gráficas bajo el mapa)
-                                     column(3, checkboxInput("show_medians","Mostrar medianas", value = TRUE))
-                                   ),
-                                   leafletOutput("map", height = 520),
-                                   conditionalPanel("input.show_medians == true", br()),
-                                   conditionalPanel("input.show_medians == true", h4("Mediana de todos los Bloques — Índices")),
-                                   conditionalPanel("input.show_medians == true", plotlyOutput("plt_idx_median_map", height = 280)),
-                                   conditionalPanel("input.show_medians == true", h4("Mediana de todos los Bloques — Temperatura")),
-                                   conditionalPanel("input.show_medians == true", plotlyOutput("plt_temp_median_map", height = 240))
-                          ),
-                          tabPanel("Tabla", DTOutput("tabla")),
-                          tabPanel("Gráficas",
-                                   # Comparador 1–2 bloques y selección del índice a graficar
-                                   fluidRow(
-                                     column(7, uiOutput("ui_blocks_plot_g")),
-                                     column(5, uiOutput("ui_index_pick"))
-                                   ),
-                                   br(),
-                                   plotlyOutput("plt_idx_comp", height = 360)
-                          ),
-                          tabPanel("Descargas",
-                                   downloadButton("dl_csv", "CSV clasificado (mes)"),
-                                   downloadButton("dl_gpkg", "GPKG clasificado (mes)")
-                          )
-              )
+      tabsetPanel(id = "tabs",
+        tabPanel("Mapa",
+          fluidRow(
+            column(4, uiOutput("ui_month")),
+            column(5, uiOutput("ui_daterange")),
+            column(3, checkboxInput("show_medians","Mostrar medianas", value = TRUE))
+          ),
+          leafletOutput("map", height = 520),
+          conditionalPanel("input.show_medians == true", br()),
+          conditionalPanel("input.show_medians == true", h4("Mediana de todos los Bloques — Índices")),
+          conditionalPanel("input.show_medians == true", plotlyOutput("plt_idx_median_map", height = 280)),
+          conditionalPanel("input.show_medians == true", h4("Mediana de todos los Bloques — Temperatura")),
+          conditionalPanel("input.show_medians == true", plotlyOutput("plt_temp_median_map", height = 240))
+        ),
+        tabPanel("Tabla", DTOutput("tabla")),
+        tabPanel("Gráficas",
+          fluidRow(
+            column(7, uiOutput("ui_blocks_plot_g")),
+            column(5, uiOutput("ui_index_pick"))
+          ),
+          br(),
+          plotlyOutput("plt_idx_comp", height = 360)
+        ),
+        tabPanel("Descargas",
+          downloadButton("dl_csv", "CSV clasificado (mes)"),
+          downloadButton("dl_gpkg", "GPKG clasificado (mes)")
+        )
+      )
     )
   )
 )
 
-
 # ----------------------- Server ----------------------
 server <- function(input, output, session) {
-  # rv: contenedor reactivo de estado compartido en toda la sesión
   rv <- reactiveValues(
-    v=NULL, tb=NULL, cm=NULL,          # v: sf de bloques; tb: tabla cruda; cm: mapeo de columnas
-    month_choices=NULL, key_month=NULL,# meses disponibles (YYYY-MM) y mes activo
-    bbx=NULL, did_zoom=FALSE,          # bbox para zoom y flag para no repetir zoom inicial
-    date_min=NULL, date_max=NULL       # fechas min/max detectadas en la tabla
+    v=NULL, tb=NULL, cm=NULL,
+    month_choices=NULL, key_month=NULL,
+    bbx=NULL, did_zoom=FALSE,
+    date_min=NULL, date_max=NULL
   )
-  
-  # ----- Mapa base: dos fondos + control de capas
+
   output$map <- renderLeaflet({
     leaflet(options = leafletOptions(worldCopyJump = TRUE)) %>%
       addProviderTiles(providers$Esri.WorldImagery, group = "Satélite") %>%
       addProviderTiles(providers$CartoDB.Positron, group = "Claro") %>%
       addLayersControl(baseGroups = c("Satélite","Claro"),
-                       overlayGroups = c("Clasificación"),
-                       options = layersControlOptions(collapsed = FALSE)) %>%
+        overlayGroups = c("Clasificación"),
+        options = layersControlOptions(collapsed = FALSE)) %>%
       addScaleBar(position = "bottomleft") %>%
-      setView(lng=-74, lat=4, zoom=5)  # Vista genérica (Colombia). Luego hacemos fitBounds al cargar la capa.
+      setView(lng=-74, lat=4, zoom=5)
   })
-  # Evita que el mapa “suspenda” eventos al cambiar de pestaña
   try(outputOptions(output, "map", suspendWhenHidden = FALSE), silent = TRUE)
-  
-  # Helper: realiza el fitBounds con validación defensiva
+
   do_zoom <- function(bbx) {
     if (is.null(bbx)) return(invisible(NULL))
     vals <- as.numeric(bbx)
@@ -382,50 +334,41 @@ server <- function(input, output, session) {
     try(leafletProxy("map") %>% fitBounds(vals[1], vals[2], vals[3], vals[4]), silent = TRUE)
     invisible(TRUE)
   }
-  
-  # ----- Carga de datos (una sola vez al inicio)
+
   observeEvent(TRUE, {
-    # Validaciones tempranas de rutas
     if (!file.exists(CONFIG$vector_path)) { showNotification("No existe vector_path.", type="error", duration=8); return(NULL) }
     if (!file.exists(CONFIG$table_path))  { showNotification("No existe table_path.",  type="error", duration=8); return(NULL) }
-    
-    # Lecturas robustas
+
     v  <- try(read_vector_any(CONFIG$vector_path, layer = CONFIG$gpkg_layer), silent = TRUE)
     if (inherits(v,"try-error")) { showNotification("Error leyendo GPKG.", type="error", duration=8); return(NULL) }
     tb <- try(read_table_any(CONFIG$table_path, sheet = CONFIG$table_sheet), silent = TRUE)
     if (inherits(tb,"try-error")) { showNotification("Error leyendo Excel.", type="error", duration=8); return(NULL) }
-    
+
     rv$v  <- v
-    rv$cm <- resolve_colmap(tb, v)  # Mapeo de columnas en función de CONFIG + nombres reales
+    rv$cm <- resolve_colmap(tb, v)
     rv$tb <- tb
-    
-    # Prepara bbox para zoom inicial
+
     bb  <- try(sf::st_bbox(v), silent = TRUE)
     if (!inherits(bb,"try-error")) rv$bbx <- expand_bbox(bb, pad=0.04)
-    if (!is.null(rv$bbx)) do_zoom(rv$bbx)  # Primer zoom automático
+    if (!is.null(rv$bbx)) do_zoom(rv$bbx)
   }, once = TRUE)
-  
-  # Reafirma el zoom tras el primer flush de UI (cubre casos de timing)
+
   session$onFlushed(function() {
     isolate({ if (!isTRUE(rv$did_zoom) && !is.null(rv$bbx)) { do_zoom(rv$bbx); rv$did_zoom <- TRUE } })
   }, once = FALSE)
-  
-  # Si vuelves a la pestaña Mapa, recenter si aún no hay zoom aplicado
+
   observeEvent(input$tabs, { if (identical(input$tabs, "Mapa") && !is.null(rv$bbx)) do_zoom(rv$bbx) }, ignoreInit = TRUE)
-  
-  # ----- Consolidación de fecha (crea tb$Fecha si no existía)
+
   tb_with_date <- reactive({
     req(rv$tb, rv$cm)
     tb <- rv$tb; cm <- rv$cm
-    
-    # 1) Si existe una columna DATE (completa), úsala para construir Year/Month
+
     if (nzchar(cm$date)) {
       f <- smart_parse_date(tb[[cm$date]])
       tb$Fecha <- f
       tb$Year  <- ifelse(is.na(f), NA_integer_, as.integer(format(f,"%Y")))
       tb$Month <- ifelse(is.na(f), NA_integer_, as.integer(format(f,"%m")))
     }
-    # 2) Si no, intenta con Year/Month por separado
     if (is.null(tb$Fecha) || all(is.na(tb$Fecha))) {
       if (nzchar(cm$year))  tb$Year  <- suppressWarnings(as.integer(tb[[cm$year]]))
       if (nzchar(cm$month)) {
@@ -438,35 +381,30 @@ server <- function(input, output, session) {
       if (!("Year" %in% names(tb)) || !("Month" %in% names(tb))) return(NULL)
       tb$Fecha <- as.Date(sprintf("%04d-%02d-01", as.integer(tb$Year), as.integer(tb$Month)))
     }
-    
-    # Normaliza el ID de tabla (string no vacío)
+
     tmp_id <- normalize_id(tb[[rv$cm$id_table]])
     tb$.id_norm <- as.character(tmp_id)
     tb$.id_norm[!nzchar(tb$.id_norm)] <- NA_character_
-    
-    # Guarda límites de fecha para inicializar el dateRangeInput
+
     rv$date_min <- suppressWarnings(min(tb$Fecha, na.rm = TRUE))
     rv$date_max <- suppressWarnings(max(tb$Fecha, na.rm = TRUE))
     tb
   })
-  
-  # ----- UI: Rango de Fechas (filtra mapa y series bajo el mapa y en “Gráficas”)
+
   output$ui_daterange <- renderUI({
     req(rv$date_min, rv$date_max)
     dateRangeInput("rng_dates","Rango de Fechas",
-                   start = rv$date_min, end = rv$date_max,
-                   min = rv$date_min, max = rv$date_max,
-                   format = "yyyy-mm-dd")
+      start = rv$date_min, end = rv$date_max,
+      min = rv$date_min, max = rv$date_max,
+      format = "yyyy-mm-dd")
   })
-  
-  # ----- Tabla filtrada por rango de fechas
+
   tb_range <- reactive({
     tb <- tb_with_date(); req(tb)
     if (is.null(input$rng_dates) || any(is.na(input$rng_dates))) return(tb)
     tb %>% dplyr::filter(Fecha >= input$rng_dates[1], Fecha <= input$rng_dates[2])
   })
-  
-  # ----- Meses disponibles (dentro del rango) y selector de mes activo
+
   observe({
     tb <- tb_range(); req(tb)
     ym <- tb %>% dplyr::mutate(ym = sprintf("%04d-%02d", Year, Month)) %>% dplyr::pull(ym) %>% unique() %>% sort()
@@ -475,30 +413,27 @@ server <- function(input, output, session) {
     output$ui_month <- renderUI(selectInput("key_month","Mes", choices = to_choices(ym), selected = rv$key_month))
   })
   observeEvent(input$key_month, { rv$key_month <- input$key_month }, ignoreInit = TRUE)
-  
-  # ----- Sliders manuales: genera el UI por índice según datos del mes activo
+
   render_thr_ui <- function(colname, input_id, label) {
     req(tb_range(), rv$key_month, nzchar(colname))
     tb <- tb_range()
     parts <- strsplit(rv$key_month,"-")[[1]]
     yy <- as.integer(parts[1]); mm <- as.integer(parts[2])
-    
+
     x <- suppressWarnings(as.numeric(tb[tb$Year==yy & tb$Month==mm, colname]))
     x <- x[is.finite(x)]
     if (!length(x)) return(NULL)
-    
+
     rng <- range(x, na.rm=TRUE)
     if (rng[1]==rng[2]) {
-      # Si todos los valores son iguales, “abre” un poco para evitar cortes coincidentes
       eps <- max(1e-6, 1e-6*max(abs(rng[1]),1,na.rm=TRUE))
       rng <- c(rng[1]-eps, rng[2]+eps)
     }
-    # Cortes sugeridos por terciles si falla Jenks o manual
     qs <- try(stats::quantile(x, probs=c(1/3,2/3), na.rm=TRUE, names=FALSE), silent=TRUE)
     if (inherits(qs,"try-error") || any(!is.finite(qs)) || qs[2]<=qs[1]) {
       qs <- rng[1] + c(0.33,0.66)*(rng[2]-rng[1])
     }
-    
+
     sliderInput(
       inputId = input_id, label = label,
       min = floor(rng[1]*1000)/1000, max = ceiling(rng[2]*1000)/1000,
@@ -509,20 +444,13 @@ server <- function(input, output, session) {
   output$ui_thr_nitrogeno <- renderUI({ if (input$class_mode=="manual" && nzchar(rv$cm$nitrogeno)) render_thr_ui(rv$cm$nitrogeno, "thr_nitrogeno", "Nitrógeno: cortes (Def-Rec / Rec-Bueno)") })
   output$ui_thr_biomasa   <- renderUI({ if (input$class_mode=="manual" && nzchar(rv$cm$biomasa))   render_thr_ui(rv$cm$biomasa,   "thr_biomasa",   "Biomasa (NDVI): cortes (Def-Rec / Rec-Bueno)") })
   output$ui_thr_estres    <- renderUI({ if (input$class_mode=="manual" && nzchar(rv$cm$estres))    render_thr_ui(rv$cm$estres,    "thr_estres",    "Estrés: cortes (Def-Rec / Rec-Bueno)") })
-  
-  # --------- CLASIFICACIÓN por mes (para mapa) ----------
-  # Une la capa vectorial con la tabla del mes activo y calcula:
-  # - Clase por índice (DEF/REG/BUEN) según modo elegido.
-  # - temp_band (Baja/Media/Alta) y temp_CL (DEF/REG/BUEN) por temperatura.
-  # - Score final = promedio de índices + peso de temperatura (opcional).
+
   classify_month <- reactive({
     req(rv$v, tb_range(), rv$cm, rv$key_month)
-    
     v <- rv$v
     v$.id_norm <- as.character(normalize_id(v[[rv$cm$id_vector]]))
-    
+
     tb <- tb_range()
-    # Si no hay tabla o mes activo, devuelve la geometría con columnas vacías
     if (is.null(tb) || is.null(rv$key_month)) {
       out <- v
       out$Score <- NA_real_
@@ -533,14 +461,12 @@ server <- function(input, output, session) {
       attr(out, "__bbox__") <- tryCatch(expand_bbox(sf::st_bbox(out), pad=0.04), error=function(e) NULL)
       return(out)
     }
-    
-    # Filtra el mes activo (YYYY-MM) y prepara el .id_norm de la tabla
+
     parts <- strsplit(rv$key_month,"-")[[1]]
     yy <- as.integer(parts[1]); mm <- as.integer(parts[2])
     slice <- tb %>% dplyr::filter(Year == yy, Month == mm)
-    
+
     if (!nrow(slice)) {
-      # No hay registros ese mes -> devuelve sf con columnas NA
       out <- v
       out$Score <- NA_real_
       out$Clase <- factor(NA, levels = LEVELS_CLASE)
@@ -550,17 +476,15 @@ server <- function(input, output, session) {
       attr(out, "__bbox__") <- tryCatch(expand_bbox(sf::st_bbox(out), pad=0.04), error=function(e) NULL)
       return(out)
     }
-    
+
     if (!(".id_norm" %in% names(slice))) slice$.id_norm <- normalize_id(slice[[rv$cm$id_table]])
     slice$.id_norm <- as.character(slice$.id_norm)
     slice$.id_norm[!nzchar(slice$.id_norm)] <- NA_character_
-    
+
     cols <- rv$cm
     on_names <- c("clorofila","nitrogeno","biomasa","estres")
-    # Índices presentes en la tabla
     present <- on_names[sapply(on_names, function(nm) nzchar(cols[[nm]]) && cols[[nm]] %in% names(slice))]
-    
-    # Corta un vector numérico en 3 clases robustamente (evita “breaks no únicos”)
+
     .safe_cut <- function(x, t1, t2, dir=+1) {
       if (!any(is.finite(x))) return(factor(rep(NA_character_, length(x)), levels=LEVELS_CLASE))
       rng <- range(x, na.rm=TRUE)
@@ -571,7 +495,6 @@ server <- function(input, output, session) {
       br <- c(-Inf,t1,t2,Inf); labs <- if (dir>=0) LEVELS_CLASE else rev(LEVELS_CLASE)
       cut(x, breaks=br, labels=labs, include.lowest=TRUE, right=TRUE)
     }
-    # Clasifica un índice según el modo (pct/jenks/manual) y dirección (estrés puede invertirse)
     class_one <- function(x, mode, dir=+1, thr=NULL) {
       x <- suppressWarnings(as.numeric(x))
       if (!any(is.finite(x))) return(factor(rep(NA_character_, length(x)), levels=LEVELS_CLASE))
@@ -590,7 +513,6 @@ server <- function(input, output, session) {
         .safe_cut(x, min(thr), max(thr), dir=dir)
       }
     }
-    # Clasifica el score final S en 3 clases según el modo
     class_score <- function(s, mode) {
       s <- suppressWarnings(as.numeric(s))
       if (!any(is.finite(s))) return(factor(rep(NA_character_, length(s)), levels=LEVELS_CLASE))
@@ -603,20 +525,16 @@ server <- function(input, output, session) {
       }
       q <- stats::quantile(s, probs=c(1/3,2/3), na.rm=TRUE, names=FALSE); .safe_cut(s, q[1], q[2], dir=+1)
     }
-    
-    # Clasificación por índice (y score numérico 0/0.5/1 para promediar)
+
     cls_idx <- list(); sc_idx <- list()
     if ("clorofila" %in% present) { thr <- if (input$class_mode=="manual") input$thr_clorofila else NULL; cls_idx$clorofila <- class_one(slice[[cols$clorofila]], input$class_mode, dir=+1, thr=thr); sc_idx$clorofila <- c("DEFICIENTE"=0,"REGULAR"=0.5,"BUENO"=1)[as.character(cls_idx$clorofila)] }
     if ("nitrogeno" %in% present) { thr <- if (input$class_mode=="manual") input$thr_nitrogeno else NULL; cls_idx$nitrogeno <- class_one(slice[[cols$nitrogeno]], input$class_mode, dir=+1, thr=thr); sc_idx$nitrogeno <- c("DEFICIENTE"=0,"REGULAR"=0.5,"BUENO"=1)[as.character(cls_idx$nitrogeno)] }
     if ("biomasa"   %in% present) { thr <- if (input$class_mode=="manual") input$thr_biomasa   else NULL; cls_idx$biomasa   <- class_one(slice[[cols$biomasa]],   input$class_mode, dir=+1, thr=thr); sc_idx$biomasa   <- c("DEFICIENTE"=0,"REGULAR"=0.5,"BUENO"=1)[as.character(cls_idx$biomasa)] }
     if ("estres"    %in% present) { thr <- if (input$class_mode=="manual") input$thr_estres    else NULL; dir_st <- if (isTRUE(input$invert_stress)) -1 else +1; cls_idx$estres <- class_one(slice[[cols$estres]], input$class_mode, dir=dir_st, thr=thr); sc_idx$estres <- c("DEFICIENTE"=0,"REGULAR"=0.5,"BUENO"=1)[as.character(cls_idx$estres)] }
-    
+
     idx_mat  <- if (length(sc_idx)) do.call(cbind, sc_idx) else NULL
     idx_mean <- if (!is.null(idx_mat)) rowMeans(idx_mat, na.rm = TRUE) else rep(NA_real_, nrow(slice))
-    
-    # Tratamiento de Temperatura:
-    # - “Temperatura Media”: dentro de [temp_mid_min, temp_mid_max] es óptimo (score=1)
-    # - Fuera del rango: penaliza linealmente (score 0–1), con denominador = ancho rango o 6 (suelo)
+
     temp_score <- NULL; temp_CL <- NULL; temp_band <- NULL; t_val <- NULL
     if (nzchar(cols$temp) && cols$temp %in% names(slice)) {
       t_val <- as.numeric(slice[[cols$temp]])
@@ -634,8 +552,7 @@ server <- function(input, output, session) {
                                         ifelse(t_val <= tmax, "Temperatura Media", "Temperatura Alta"))),
                           levels = TEMP_LABELS)
     }
-    
-    # Score final S: promedio índices (+ mezcla con temperatura según peso)
+
     S <- idx_mean
     if (!is.null(temp_score) && !all(is.na(temp_score))) {
       w <- input$temp_weight
@@ -643,8 +560,7 @@ server <- function(input, output, session) {
         if (all(is.na(S))) S <- temp_score else S <- (1 - w) * S + w * temp_score
       }
     }
-    
-    # Tabla intermedia (por bloque) para unir al sf
+
     res_slice <- dplyr::tibble(
       .id_norm = slice$.id_norm,
       Score    = S,
@@ -654,34 +570,25 @@ server <- function(input, output, session) {
     if (!is.null(temp_CL))   res_slice[["temp_CL"]]   <- temp_CL
     if (!is.null(temp_band)) res_slice[["temp_band"]] <- temp_band
     if (!is.null(t_val) && nzchar(cols$temp)) res_slice[[cols$temp]] <- t_val
-    
-    # Unión sf + clasificación por .id_norm
+
     out <- dplyr::left_join(v, res_slice, by = ".id_norm")
     if ("temp_band" %in% names(out)) out$temp_band <- factor(out$temp_band, levels = TEMP_LABELS)
     if ("Clase" %in% names(out))     out$Clase     <- factor(out$Clase, levels = LEVELS_CLASE)
     attr(out, "__bbox__") <- tryCatch(expand_bbox(sf::st_bbox(out), pad=0.04), error=function(e) NULL)
     out
   })
-  
-  # -------------------- MAPA: pintar y leyenda --------------------
+
   observe({
     dat <- classify_month(); req(dat)
-    # Qué columna usar para colorear
     cls_col <- switch(input$view_mode,
-                      score = "Clase",
-                      clorofila = "clorofila_CL",
-                      nitrogeno = "nitrogeno_CL",
-                      biomasa   = "biomasa_CL",
-                      estres    = "estres_CL",
-                      temp      = "temp_band",
-                      "Clase")
-    
+      score = "Clase", clorofila = "clorofila_CL", nitrogeno = "nitrogeno_CL",
+      biomasa = "biomasa_CL", estres = "estres_CL", temp = "temp_band", "Clase")
+
     if (!(cls_col %in% names(dat))) {
       showNotification(sprintf("No hay clasificación para '%s' en el mes seleccionado.", input$view_mode), type="warning", duration=6)
       return(NULL)
     }
-    
-    # Paleta y título de leyenda según modo
+
     if (input$view_mode == "temp") {
       pal <- colorFactor(pal_temp, levels = TEMP_LABELS, na.color = "#cccccc")
       ClaseVis <- dat[[cls_col]]
@@ -691,8 +598,7 @@ server <- function(input, output, session) {
       ClaseVis <- dat[[cls_col]]
       legend_title <- sprintf("%s — %s", rv$key_month, stringr::str_to_title(ifelse(input$view_mode=="score","Score", input$view_mode)))
     }
-    
-    # Determina una etiqueta razonable para el popup/label
+
     lab_col <- {
       prefs <- c(rv$cm$id_vector, paste0(rv$cm$id_vector, c(".x",".y")),"Nombre", rv$cm$id_table, paste0(rv$cm$id_table, c(".x",".y")))
       found <- prefs[prefs %in% names(dat)]
@@ -700,12 +606,11 @@ server <- function(input, output, session) {
     }
     lab_vec <- as.character(dat[[lab_col]])
     lbl <- sprintf("<strong>%s</strong><br/>Color por: %s<br/>Clase: %s<br/>Score: %s",
-                   htmltools::htmlEscape(lab_vec),
-                   htmltools::htmlEscape(ifelse(input$view_mode=="score","Score final", stringr::str_to_title(input$view_mode))),
-                   htmltools::htmlEscape(as.character(ClaseVis)),
-                   ifelse(is.null(dat$Score),"NA", formatC(dat$Score, digits=3, format="f"))) |> lapply(htmltools::HTML)
-    
-    # Limpia capa y controles, y pinta según familia geométrica
+      htmltools::htmlEscape(lab_vec),
+      htmltools::htmlEscape(ifelse(input$view_mode=="score","Score final", stringr::str_to_title(input$view_mode))),
+      htmltools::htmlEscape(as.character(ClaseVis)),
+      ifelse(is.null(dat$Score),"NA", formatC(dat$Score, digits=3, format="f"))) |> lapply(htmltools::HTML)
+
     proxy <- leafletProxy("map") %>% clearGroup("Clasificación") %>% clearControls()
     fam <- geom_family(dat)
     add_args <- if (fam == "point") {
@@ -717,26 +622,23 @@ server <- function(input, output, session) {
     }
     proxy <- safe_add(proxy, fam, dat, add_args)
     proxy %>% addLegend(position="bottomright", pal=pal, values=ClaseVis, title=legend_title, opacity=1)
-    
-    # Re-centrado automático cada vez que cambia el mes o el modo
+
     bbx <- attr(dat, "__bbox__"); if (!is.null(bbx)) do_zoom(bbx) else if (!is.null(rv$bbx)) do_zoom(rv$bbx)
   })
-  
-  # --------- MAPA: gráficas de mediana (Índices + Temperatura) ----------
-  # Series temporales (medianas por fecha, usando el rango de fechas activo)
+
   output$plt_idx_median_map <- renderPlotly({
     req(isTRUE(input$show_medians))
     tb <- tb_range(); req(tb)
     idx_cols <- c(clorofila=rv$cm$clorofila, nitrogeno=rv$cm$nitrogeno, biomasa=rv$cm$biomasa, estres=rv$cm$estres)
     idx_cols <- idx_cols[nzchar(idx_cols)]
     validate(need(length(idx_cols) > 0, "No hay columnas de índices configuradas en CONFIG$columns."))
-    
+
     df <- tb %>% dplyr::group_by(Fecha) %>%
       dplyr::summarise(dplyr::across(dplyr::all_of(unname(idx_cols)), ~median(., na.rm=TRUE)), .groups="drop") %>%
       tidyr::pivot_longer(cols = dplyr::all_of(unname(idx_cols)), names_to = "indice", values_to = "valor")
     validate(need(nrow(df) > 0, "Sin datos para graficar."))
     validate(need(any(is.finite(df$valor)), "Valores no numéricos en índices."))
-    
+
     p <- plotly::plot_ly()
     for (ind in unique(df$indice)) {
       sub <- df[df$indice==ind, ]
@@ -746,7 +648,7 @@ server <- function(input, output, session) {
     p %>% layout(title="Índices — Mediana de Bloques (Rango Seleccionado)",
                  xaxis=list(title="Fecha"), yaxis=list(title="Valor índice"))
   })
-  
+
   output$plt_temp_median_map <- renderPlotly({
     req(isTRUE(input$show_medians))
     tb <- tb_range(); req(tb)
@@ -759,66 +661,60 @@ server <- function(input, output, session) {
     plot_ly(df, x=~Fecha, y=df[[colT]], type="scatter", mode="lines", name="Temp") %>%
       layout(title="Temperatura — Mediana de Bloques (Rango Seleccionado)", xaxis=list(title="Fecha"), yaxis=list(title="°C"))
   })
-  
-  # -------------------- TABLA --------------------
-  # Limpia columnas internas, renombra "temp_band" a “Estado Temperatura” y coloca “Nombre” primero.
+
   output$tabla <- renderDT({
     dat <- classify_month(); req(dat)
     df <- sf::st_drop_geometry(dat)
-    
+
     id_tab <- rv$cm$id_table
     if (!is.null(id_tab) && nzchar(id_tab)) {
       if (id_tab %in% names(df)) df$Nombre <- df[[id_tab]]
       else if (paste0(id_tab, ".y") %in% names(df)) df$Nombre <- df[[paste0(id_tab, ".y")]]
     }
-    
+
     drop_cols <- c("Name.x","Name.y","name.x","name.y",".id_norm","id_norm","score","Score")
     df <- dplyr::select(df, -dplyr::any_of(drop_cols))
-    
+
     if ("temp_band" %in% names(df)) df <- dplyr::rename(df, `Estado Temperatura` = temp_band)
     if ("Nombre" %in% names(df)) df <- dplyr::relocate(df, Nombre)
-    
+
     DT::datatable(df, options = list(pageLength=10, scrollX=TRUE), rownames=FALSE)
   })
-  
-  # -------------------- GRÁFICAS (comparación) --------------------
-  # Selector de 1–2 bloques (usa los nombres “humanos” de la capa vectorial)
+
   observe({
     req(rv$v, rv$cm$id_vector)
     lab_vals <- unique(as.character(rv$v[[rv$cm$id_vector]]))
     lab_vals <- lab_vals[!is.na(lab_vals)]
     output$ui_blocks_plot_g <- renderUI(
       selectizeInput("blocks_plot_g","Bloques a Comparar (1–2)",
-                     choices = lab_vals, selected = character(0),
-                     multiple = TRUE, options = list(maxItems = 2, placeholder = "Seleccione 1 o 2 Bloques"))
+        choices = lab_vals, selected = character(0),
+        multiple = TRUE, options = list(maxItems = 2, placeholder = "Seleccione 1 o 2 Bloques"))
     )
   })
-  # Selector de índice a graficar (usa nombres reales de la tabla)
+
   observe({
     idx_map <- c(Clorofila=rv$cm$clorofila, `Nitrógeno`=rv$cm$nitrogeno, Biomasa=rv$cm$biomasa, `Estrés`=rv$cm$estres)
     idx_map <- idx_map[nzchar(idx_map)]
     output$ui_index_pick <- renderUI(selectInput("index_pick","Índice a Graficar", choices = idx_map))
   })
-  
-  # Convierte los nombres “humanos” elegidos a .id_norm para filtrar la tabla
+
   selected_id_norms <- reactive({
     req(rv$v, rv$cm$id_vector)
     sels <- input$blocks_plot_g
     if (is.null(sels) || !length(sels)) return(character(0))
     normalize_id(sels)
   })
-  
-  # Serie temporal del índice elegido para 1–2 bloques seleccionados
+
   output$plt_idx_comp <- renderPlotly({
     tb <- tb_range(); req(tb)
     idx_col <- input$index_pick; validate(need(nzchar(idx_col), "Seleccione un índice."))
     sels <- selected_id_norms()
     validate(need(length(sels) >= 1, "Seleccione al menos un bloque para comparar."))
-    
+
     df <- tb %>% dplyr::filter(.id_norm %in% sels) %>% dplyr::select(Fecha, .id_norm, dplyr::all_of(idx_col))
     validate(need(nrow(df) > 0, "No hay datos para esos bloques/índice en el rango seleccionado."))
     validate(need(any(is.finite(df[[idx_col]])), "La serie no tiene valores numéricos válidos."))
-    
+
     p <- plotly::plot_ly()
     for (e in unique(df$.id_norm)) {
       sub <- df[df$.id_norm==e, ]
@@ -829,8 +725,7 @@ server <- function(input, output, session) {
                   paste0("Índice · ", paste(sels, collapse=" vs ")))
     p %>% layout(title=ttl, xaxis=list(title="Fecha"), yaxis=list(title="Valor índice"))
   })
-  
-  # -------------------- Descargas --------------------
+
   output$dl_csv <- downloadHandler(
     filename = function() paste0("pina_clasificado_", rv$key_month, ".csv"),
     content = function(file) { dat <- classify_month(); req(dat); readr::write_csv(sf::st_drop_geometry(dat), file) }
@@ -839,10 +734,7 @@ server <- function(input, output, session) {
     filename = function() paste0("pina_clasificado_", rv$key_month, ".gpkg"),
     content = function(file) { dat <- classify_month(); req(dat); sf::st_write(dat, file, delete_dsn = TRUE, quiet = TRUE) }
   )
-  
-  # -------------------- Botón: Zoom a bloques --------------------
-  # Intenta primero con el bbox del sf ya clasificado (que incluye unión),
-  # luego con el bbox de la capa cruda, y finalmente con el último bbox guardado.
+
   observeEvent(input$btn_recenter, {
     dat <- classify_month()
     if (!is.null(dat)) {
@@ -856,9 +748,4 @@ server <- function(input, output, session) {
   })
 }
 
-# Lanza la app
 shinyApp(ui, server)
-
-
-
-
